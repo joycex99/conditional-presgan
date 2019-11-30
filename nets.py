@@ -59,4 +59,5 @@ class Discriminator(nn.Module):
         
     def forward(self, input):
         output = self.main(input)
+        import pdb; pdb.set_trace()
         return output.view(-1, 1).squeeze(1)

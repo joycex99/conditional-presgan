@@ -17,7 +17,8 @@ import torch.nn.functional as F
 import utils 
 import data 
 import nets
-import train
+import nets_cond
+import train_cond
 
 parser = argparse.ArgumentParser()
 
@@ -100,13 +101,13 @@ dat = data.load_data(args.dataset, args.dataroot, args.batchSize,
                         device=device, imgsize=args.imageSize, Ntrain=args.Ntrain, Ntest=args.Ntest)
 
 #### defining generator
-netG = nets.Generator(args.imageSize, args.nz, args.ngf, dat['nc']).to(device)
+netG = nets_cond.Generator(args.imageSize, args.nz, args.ngf, dat['nc']).to(device)
 if args.model == 'presgan':
     log_sigma = torch.tensor([args.logsigma_init]*(args.imageSize*args.imageSize), device=device, requires_grad=True)
 print('{} Generator: {}'.format(args.model.upper(), netG))
 
 #### defining discriminator
-netD = nets.Discriminator(args.imageSize, args.ndf, dat['nc']).to(device) 
+netD = nets_cond.Discriminator(args.imageSize, args.ndf, dat['nc']).to(device) 
 print('{} Discriminator: {}'.format(args.model.upper(), netD))
 
 #### initialize weights
@@ -121,6 +122,6 @@ if args.ckptD != '':
 if args.model == 'dcgan':
     train.dcgan(dat, netG, netD, args)
 elif args.model == 'presgan':
-    train.presgan(dat, netG, netD, log_sigma, args)
+    train_cond.presgan(dat, netG, netD, log_sigma, args)
 else:
     raise NotImplementedError('Your model is not supported yet :-(')
