@@ -8,8 +8,8 @@ class Generator(nn.Module):
 
         self.ngf = ngf
         self.nz = nz
-        self.fc_labels = nn.Linear(num_classes, 1000)
-        self.fc_combined = nn.Linear(nz + 1000, (ngf*8) * 4 * 4)
+        self.fc_labels = nn.Linear(num_classes, 1000) # 1000
+        self.fc_combined = nn.Linear(nz + num_classes, (ngf*8) * 4 * 4) # nz + 1000
         self.bn1 = nn.BatchNorm2d(ngf * 8)
         
         self.main = nn.Sequential(
@@ -46,8 +46,9 @@ class Generator(nn.Module):
 
         bsz = input.size(0)
         # transorm y: 10 -> 1000
-        y_ = self.fc_labels(y) # y should be (64)
-        y_ = F.relu(y_)
+        # y_ = self.fc_labels(y) # y should be (64)
+        # y_ = F.relu(y_)
+        y_ = y
         # concat x and y and transform: 1100 -> ngf*8*4*4
         x = torch.cat([input.squeeze(), y_], 1)
         x = self.fc_combined(x) # [64, 1100] -> [64, 8192]
@@ -89,9 +90,11 @@ class Discriminator(nn.Module):
             #nn.Sigmoid() # [64, 1, 1, 1]
         )
         # 64*16*16 + 800 -> 1024
-        self.fc1  = nn.Linear((ndf*8) * 4 * 4 + 1000, 1024)
-        self.fc2 = nn.Linear(1024, 1)
         self.fc_labels = nn.Linear(num_classes, 1000)
+        # self.fc1  = nn.Linear((ndf*8) * 4 * 4 + 1000, 1024) 4
+        # self.fc2 = nn.Linear(1024, 1)
+        self.fc1  = nn.Linear((ndf*8) * 4 * 4 + num_classes, 128)
+        self.fc2 = nn.Linear(128, 1)
 
         # self.fc_combined = nn.Linear(nz + 1000, (ngf*16) * 2 * 2)
         # self.bc1 = nn.BatchNorm2d(ngf * 16)
@@ -102,8 +105,9 @@ class Discriminator(nn.Module):
         x = self.main(input)
 
         x = x.view(bsz, (self.ndf*8) * 4 * 4)
-        y_ = self.fc_labels(y)
-        y_ = F.relu(y_)
+        # y_ = self.fc_labels(y)
+        # y_ = F.relu(y_)
+        y_ = y
         x = torch.cat([x, y_], 1)
         x = self.fc1(x)
         x = F.relu(x)
