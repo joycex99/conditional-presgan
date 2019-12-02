@@ -102,6 +102,7 @@ def presgan(dat, netG, netD, log_sigma, args):
 
             netD.zero_grad()
             stop = min(bsz, len(X_training[i:]))
+            if stop < bsz: continue
             real_cpu = X_training[i:i+stop].to(device) # [64, 1, 64, 64]
 
             batch_size = real_cpu.size(0)
