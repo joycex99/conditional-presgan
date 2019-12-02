@@ -110,7 +110,7 @@ def presgan(dat, netG, netD, log_sigma, args):
             # train discriminator on real (noised) data and real labels
             y_labels = Y_training[i:i+stop].to(device)
             y_one_hot = torch.FloatTensor(bsz, NUM_CLASS) 
-            y_one_hot.zero_().scatter_(1, y_labels.view(batch_size, 1), 1)
+            y_one_hot.zero_().scatter_(1, y_labels.view(bsz, 1), 1)
 
             noise_eta = torch.randn_like(real_cpu)
             noised_data = real_cpu + sigma_x.detach() * noise_eta
