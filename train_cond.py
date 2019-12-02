@@ -109,8 +109,9 @@ def presgan(dat, netG, netD, log_sigma, args):
 
             # train discriminator on real (noised) data and real labels
             y_labels = Y_training[i:i+stop].to(device)
-            y_one_hot = torch.FloatTensor(bsz, NUM_CLASS) 
-            y_one_hot.zero_().scatter_(1, y_labels.view(bsz, 1), 1)
+            y_one_hot = torch.FloatTensor(stop, NUM_CLASS)
+            print(stop, bsz, y_labels.size())
+            y_one_hot.zero_().scatter_(1, y_labels.view(stop, 1), 1)
 
             noise_eta = torch.randn_like(real_cpu)
             noised_data = real_cpu + sigma_x.detach() * noise_eta
@@ -120,8 +121,8 @@ def presgan(dat, netG, netD, log_sigma, args):
             D_x = out_real.mean().item()
 
             # make generator output image from random labels; make discriminator classify
-            rand_y_one_hot = torch.FloatTensor(bsz, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(bsz,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            rand_y_one_hot = torch.FloatTensor(stop, NUM_CLASS).zero_()
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(stop,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
 
             noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
             mu_fake = netG(noise, rand_y_one_hot) 
