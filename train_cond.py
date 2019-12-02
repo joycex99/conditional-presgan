@@ -123,7 +123,7 @@ def presgan(dat, netG, netD, log_sigma, args):
 
             # make generator output image from random labels; make discriminator classify
             rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), seed=123), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
 
             noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
             mu_fake = netG(noise, rand_y_one_hot) 
@@ -142,7 +142,7 @@ def presgan(dat, netG, netD, log_sigma, args):
             sigma_optimizer.zero_grad()
 
             rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1)
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), seed=123), 1)
             labelv.fill_(real_label)  
             gen_input = torch.randn(batch_size, args.nz, 1, 1, device=device)
             out = netG(gen_input, rand_y_one_hot) # add rand y labels
@@ -202,7 +202,10 @@ def presgan(dat, netG, netD, log_sigma, args):
                         stepsize, acceptRate.min().item(), acceptRate.mean().item(), acceptRate.max().item()))
 
         if epoch % args.save_imgs_every == 0:
-            fake = netG(fixed_noise).detach()
+            rand_y_one_hot = torch.FloatTensor(args.num_gen_images, NUM_CLASS).zero_()
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(args.num_gen_images,1), seed=123), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            fake = netG(fixed_noise, rand_y_one_hot).detach()
+
             vutils.save_image(fake, '%s/presgan_%s_fake_epoch_%03d.png' % (args.results_folder, args.dataset, epoch), normalize=True, nrow=20) 
 
         if epoch % args.save_ckpt_every == 0:
