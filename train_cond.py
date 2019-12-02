@@ -15,6 +15,7 @@ import hmc
 
 from torch.distributions.normal import Normal
 
+torch.manual_seed(123)
 real_label = 1
 fake_label = 0
 criterion = nn.BCELoss()
@@ -102,7 +103,6 @@ def presgan(dat, netG, netD, log_sigma, args):
 
             netD.zero_grad()
             stop = min(bsz, len(X_training[i:]))
-            if stop == bsz: continue
             real_cpu = X_training[i:i+stop].to(device) # [64, 1, 64, 64]
 
             batch_size = real_cpu.size(0)
@@ -111,7 +111,6 @@ def presgan(dat, netG, netD, log_sigma, args):
             # train discriminator on real (noised) data and real labels
             y_labels = Y_training[i:i+stop].to(device)
             y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS)
-            print(batch_size, bsz, y_labels.size())
             y_one_hot.zero_().scatter_(1, y_labels.view(batch_size, 1), 1)
 
             noise_eta = torch.randn_like(real_cpu)
@@ -123,7 +122,7 @@ def presgan(dat, netG, netD, log_sigma, args):
 
             # make generator output image from random labels; make discriminator classify
             rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), seed=123), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
 
             noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
             mu_fake = netG(noise, rand_y_one_hot) 
@@ -142,7 +141,7 @@ def presgan(dat, netG, netD, log_sigma, args):
             sigma_optimizer.zero_grad()
 
             rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), seed=123), 1)
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1)
             labelv.fill_(real_label)  
             gen_input = torch.randn(batch_size, args.nz, 1, 1, device=device)
             out = netG(gen_input, rand_y_one_hot) # add rand y labels
