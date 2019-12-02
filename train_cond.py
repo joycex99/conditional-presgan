@@ -110,9 +110,9 @@ def presgan(dat, netG, netD, log_sigma, args):
 
             # train discriminator on real (noised) data and real labels
             y_labels = Y_training[i:i+stop].to(device)
-            y_one_hot = torch.FloatTensor(stop, NUM_CLASS)
-            print(stop, bsz, y_labels.size())
-            y_one_hot.zero_().scatter_(1, y_labels.view(stop, 1), 1)
+            y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS)
+            print(batch_size, bsz, y_labels.size())
+            y_one_hot.zero_().scatter_(1, y_labels.view(batch_size, 1), 1)
 
             noise_eta = torch.randn_like(real_cpu)
             noised_data = real_cpu + sigma_x.detach() * noise_eta
@@ -122,8 +122,8 @@ def presgan(dat, netG, netD, log_sigma, args):
             D_x = out_real.mean().item()
 
             # make generator output image from random labels; make discriminator classify
-            rand_y_one_hot = torch.FloatTensor(stop, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(stop,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
 
             noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
             mu_fake = netG(noise, rand_y_one_hot) 
@@ -141,8 +141,8 @@ def presgan(dat, netG, netD, log_sigma, args):
             netG.zero_grad()
             sigma_optimizer.zero_grad()
 
-            rand_y_one_hot = torch.FloatTensor(bsz, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(bsz,1)), 1)
+            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1)
             labelv.fill_(real_label)  
             gen_input = torch.randn(batch_size, args.nz, 1, 1, device=device)
             out = netG(gen_input, rand_y_one_hot) # add rand y labels
@@ -167,6 +167,7 @@ def presgan(dat, netG, netD, log_sigma, args):
                         args.num_samples_posterior, args.leapfrog_steps, stepsize, args.flag_adapt, 
                             args.hmc_learning_rate, args.hmc_opt_accept)
                 
+                # TODO: check if output size should be bsz
                 bsz, d = hmc_samples.size()
                 mean_output = netG(hmc_samples.view(bsz, d, 1, 1).to(device), hmc_labels)
                 bsz = g_fake_data.size(0)
