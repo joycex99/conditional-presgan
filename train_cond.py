@@ -8,18 +8,22 @@ import seaborn as sns
 import os 
 import pickle 
 import math 
+import csv
 
 import utils 
 import hmc 
 
 
 from torch.distributions.normal import Normal
+from tensorboardX import SummaryWriter
+
 
 torch.manual_seed(123)
 real_label = 1
 fake_label = 0
 criterion = nn.BCELoss()
 criterion_mse = nn.MSELoss()
+writer = SummaryWriter(log_dir='tensorboard')
 
 def dcgan(dat, netG, netD, args):
     device = args.device
@@ -153,7 +157,13 @@ def presgan(dat, netG, netD, log_sigma, args):
             D_G_z2 = dg_fake_decision.mean().item()
 
             # TO TEST WITHOUT ENTROPY, SET: 
-            # args.lambda_ = 0
+            if epoch < 10 and args.lambda_ != 0: 
+                args.lambda_ = 0
+            elif epoch < 20 and args.lambda_ != 0: 
+                args.lambda_ = 0.0001
+            elif args.lambda_ != 0:
+                args.lambda_ = 0.0002
+
             if args.lambda_ == 0:
                 g_error_gan.backward()
                 optimizerG.step() 
@@ -162,7 +172,7 @@ def presgan(dat, netG, netD, log_sigma, args):
             else:
                 # added y_tilde param (rand_y_one_hot)
                 hmc_samples, hmc_labels, acceptRate, stepsize = hmc.get_samples(
-                    netG, g_fake_data.detach(), rand_y_one_hot, gen_input.clone(), sigma_x.detach(), args.burn_in, 
+                    netG, g_fake_data.detach(), rand_y_one_hot.detach(), gen_input.clone(), sigma_x.detach(), args.burn_in, 
                         args.num_samples_posterior, args.leapfrog_steps, stepsize, args.flag_adapt, 
                             args.hmc_learning_rate, args.hmc_opt_accept)
                 
@@ -191,6 +201,18 @@ def presgan(dat, netG, netD, log_sigma, args):
             if i % args.log == 0:
                 print('Epoch [%d/%d] .. Batch [%d/%d] .. Loss_D: %.4f .. Loss_G: %.4f .. D(x): %.4f .. D(G(z)): %.4f / %.4f'
                         % (epoch, args.epochs, i, len(X_training), errD.data, g_error_gan.data, D_x, D_G_z1, D_G_z2))
+                with open('%s/log.csv' % args.results_folder, 'a') as f:
+                    r = csv.writer(f)
+                    # Loss_G, Loss_D, D(x), D(G(z))
+                    r.writerow([g_error_gan.data, errD.data, D_x, D_G_z2])
+
+
+            if i % (2*args.log) == 0:
+                t_iter = (epoch*len(X_training)+i)/bsz
+                writer.add_scalar('Loss_G', g_error_gan.data, t_iter)
+                writer.add_scalar('Loss_D', errD.data, t_iter)
+                writer.add_scalar('D(x)', D_x, t_iter)
+                writer.add_scalar('D(G(z))', D_G_z2, t_iter)
 
         print('*'*100)
         print('End of epoch {}'.format(epoch))
@@ -210,4 +232,4 @@ def presgan(dat, netG, netD, log_sigma, args):
         if epoch % args.save_ckpt_every == 0:
             torch.save(netG.state_dict(), os.path.join(args.results_folder, 'netG_presgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
             torch.save(log_sigma, os.path.join(args.results_folder, 'log_sigma_%s_%s.pth'%(args.dataset, epoch)))
-            
+
