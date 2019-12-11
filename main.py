@@ -23,7 +23,7 @@ import train_cond
 parser = argparse.ArgumentParser()
 
 ###### Data arguments
-parser.add_argument('--dataset', required=True, help=' ring | mnist | stackedmnist | cifar10 ')
+parser.add_argument('--dataset', required=True, help=' ring | mnist | stackedmnist | cifar10 | celeba')
 parser.add_argument('--dataroot', type=str, default='data', help='path to dataset')
 parser.add_argument('--workers', type=int, help='number of data loading workers', default=2) 
 parser.add_argument('--imageSize', type=int, default=64, help='the height / width of the input image to network')
@@ -71,12 +71,12 @@ parser.add_argument('--hmc_opt_accept', type=float, default=0.67, help='hmc opti
 parser.add_argument('--save_sigma_every', type=int, default=1, help='interval to save sigma for sigan traceplot')
 parser.add_argument('--stepsize_num', type=float, default=1.0, help='initial value for hmc stepsize')
 parser.add_argument('--restrict_sigma', type=int, default=0, help='whether to restrict sigma or not')
-
+parser.add_argument('--n_classes', type = int, default = 10, help = 'Number of classes')
 
 args = parser.parse_args()
 
 if args.model == 'presgan':
-    args.results_folder = args.model+'_lambda_'+str(args.lambda_)
+    args.results_folder = args.model+'_lambda_'+str(args.lambda_)+str(args.dataset)
 else:
     args.results_folder = args.model
 
@@ -101,13 +101,13 @@ dat = data.load_data(args.dataset, args.dataroot, args.batchSize,
                         device=device, imgsize=args.imageSize, Ntrain=args.Ntrain, Ntest=args.Ntest)
 
 #### defining generator
-netG = nets_cond.Generator(args.imageSize, args.nz, args.ngf, dat['nc']).to(device)
+netG = nets_cond.Generator(args.imageSize, args.nz, args.ngf, dat['nc'], args.n_classes).to(device)
 if args.model == 'presgan':
     log_sigma = torch.tensor([args.logsigma_init]*(args.imageSize*args.imageSize), device=device, requires_grad=True)
 print('{} Generator: {}'.format(args.model.upper(), netG))
 
 #### defining discriminator
-netD = nets_cond.Discriminator(args.imageSize, args.ndf, dat['nc']).to(device) 
+netD = nets_cond.Discriminator(args.imageSize, args.ndf, dat['nc'], args.n_classes).to(device) 
 print('{} Discriminator: {}'.format(args.model.upper(), netD))
 
 #### initialize weights
