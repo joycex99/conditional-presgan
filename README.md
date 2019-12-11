@@ -12,7 +12,7 @@ Entropy on MNIST
 ![Mnist](https://raw.githubusercontent.com/evazhang612/gan-results/master/mnist0.0/presgan_mnist_fake_epoch_041.png)
 
 Entropy Saturation on CelebA (0.0002)
-![CelebA](
+![CelebA](https://github.com/evazhang612/gan-results/blob/master/hardcodedceleba/presgan_celeba_fake_epoch_015.png)
 
 Entropy Saturation on Cifar-10 0.0002)
 ![Saturation](https://raw.githubusercontent.com/evazhang612/gan-results/master/cifar10_00005/presgan_cifar10_fake_epoch_077.png)
