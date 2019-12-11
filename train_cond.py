@@ -17,13 +17,11 @@ import hmc
 from torch.distributions.normal import Normal
 from tensorboardX import SummaryWriter
 
-
 torch.manual_seed(123)
 real_label = 1
 fake_label = 0
 criterion = nn.BCELoss()
 criterion_mse = nn.MSELoss()
-writer = SummaryWriter(log_dir='tensorboard')
 
 def dcgan(dat, netG, netD, args):
     device = args.device
@@ -91,6 +89,7 @@ def dcgan(dat, netG, netD, args):
 
             
 def presgan(dat, netG, netD, log_sigma, args):
+    writer = SummaryWriter(log_dir='tensorboard'+args.dataset)
     device = args.device
     if torch.cuda.is_available():
         print("cuda")
@@ -173,11 +172,11 @@ def presgan(dat, netG, netD, log_sigma, args):
             D_G_z2 = dg_fake_decision.mean().item()
 
             # TO TEST WITHOUT ENTROPY, SET: 
-            if epoch < 10 and args.lambda_ != 0: 
+            if epoch < 10 and args.lambda_ != 0 and args.dataset != 'mnist': 
                 args.lambda_ = 0
-            elif epoch < 20 and args.lambda_ != 0: 
+            elif epoch < 20 and args.lambda_ != 0 and args.dataset != 'mnist': 
                 args.lambda_ = 0.0001
-            elif args.lambda_ != 0:
+            elif args.lambda_ != 0 and args.dataset != 'mnist':
                 args.lambda_ = 0.0002
 
             if args.lambda_ == 0:
