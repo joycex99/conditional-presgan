@@ -1,3 +1,4 @@
-Example usage
+*Example usage*
 
-`$ python main.py --dataset mnist --model presgan --lambda 0.02`
+Running conditional gan (train_cond.py) with regularization term 0.0002
+`$ python main.py --dataset cifar10 --model presgan --lambda 0.0002`
