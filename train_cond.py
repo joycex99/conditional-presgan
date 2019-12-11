@@ -27,6 +27,11 @@ writer = SummaryWriter(log_dir='tensorboard')
 
 def dcgan(dat, netG, netD, args):
     device = args.device
+    if torch.cuda.is_available():
+        netG.cuda()
+        netD.cuda()
+        criterion.cuda()
+        criterion_mse.cuda()
     X_training = dat['X_train'].to(device)
     fixed_noise = torch.randn(args.num_gen_images, args.nz, 1, 1, device=device)
     optimizerD = optim.Adam(netD.parameters(), lr=args.lrD, betas=(args.beta1, 0.999))
@@ -83,14 +88,23 @@ def dcgan(dat, netG, netD, args):
             torch.save(netG.state_dict(), os.path.join(args.results_folder, 'netG_dcgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
 
 
+
+            
 def presgan(dat, netG, netD, log_sigma, args):
     device = args.device
+    if torch.cuda.is_available():
+        print("cuda")
+        netG.cuda()
+        netD.cuda()
+        criterion.cuda()
+        criterion_mse.cuda()
     X_training = dat['X_train'].to(device) # [60000, 1, 64, 64]
     fixed_noise = torch.randn(args.num_gen_images, args.nz, 1, 1, device=device)
-
+    torch.manual_seed(123)
     # NEW
     Y_training = dat['Y_train'].to(device)
-    NUM_CLASS = 10
+    # NUM_CLASS = 10
+    NUM_CLASS = args.n_classes
 
     optimizerD = optim.Adam(netD.parameters(), lr=args.lrD, betas=(args.beta1, 0.999))
     optimizerG = optim.Adam(netG.parameters(), lr=args.lrG, betas=(args.beta1, 0.999)) 
@@ -103,6 +117,7 @@ def presgan(dat, netG, netD, log_sigma, args):
     bsz = args.batchSize
     for epoch in range(1, args.epochs+1):
         for i in range(0, len(X_training), bsz): # bsz = 64
+
             sigma_x = F.softplus(log_sigma).view(1, 1, args.imageSize, args.imageSize)
 
             netD.zero_grad()
@@ -110,14 +125,15 @@ def presgan(dat, netG, netD, log_sigma, args):
             real_cpu = X_training[i:i+stop].to(device) # [64, 1, 64, 64]
 
             batch_size = real_cpu.size(0)
-            labelv = torch.full((batch_size,), real_label, device=device)
+            labelv = torch.full((batch_size,), real_label).to(device)
 
             # train discriminator on real (noised) data and real labels
             y_labels = Y_training[i:i+stop].to(device)
-            y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS)
-            y_one_hot.zero_().scatter_(1, y_labels.view(batch_size, 1), 1)
+            y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).to(device) # adding cuda here 
+            # print(batch_size, bsz, y_labels.size())
+            y_one_hot = y_one_hot.zero_().scatter_(1, y_labels.view(batch_size, 1), 1).to(device)
 
-            noise_eta = torch.randn_like(real_cpu)
+            noise_eta = torch.randn_like(real_cpu).to(device)
             noised_data = real_cpu + sigma_x.detach() * noise_eta
             out_real = netD(noised_data, y_one_hot) #, y_one_hot_labels
             errD_real = criterion(out_real, labelv)
@@ -125,13 +141,13 @@ def presgan(dat, netG, netD, log_sigma, args):
             D_x = out_real.mean().item()
 
             # make generator output image from random labels; make discriminator classify
-            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_().to(device) # adding cuda here 
+            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), device = device), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
 
             noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
             mu_fake = netG(noise, rand_y_one_hot) 
             fake = mu_fake + sigma_x * noise_eta
-            labelv.fill_(fake_label)
+            labelv = labelv.fill_(fake_label).to(device)
             out_fake = netD(fake.detach(), rand_y_one_hot)
             errD_fake = criterion(out_fake, labelv)
             errD_fake.backward()
@@ -144,9 +160,9 @@ def presgan(dat, netG, netD, log_sigma, args):
             netG.zero_grad()
             sigma_optimizer.zero_grad()
 
-            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1)), 1)
-            labelv.fill_(real_label)  
+            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_().to(device)
+            rand_y_one_hot = rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), device = device), 1).to(device)
+            labelv = labelv.fill_(real_label).to(device)  
             gen_input = torch.randn(batch_size, args.nz, 1, 1, device=device)
             out = netG(gen_input, rand_y_one_hot) # add rand y labels
             noise_eta = torch.randn_like(out)
@@ -178,10 +194,12 @@ def presgan(dat, netG, netD, log_sigma, args):
                 
                 # TODO: check if output size should be bsz
                 bsz, d = hmc_samples.size()
-                mean_output = netG(hmc_samples.view(bsz, d, 1, 1).to(device), hmc_labels)
+                hmc_samples = hmc_samples.view(bsz, d, 1, 1).to(device)
+                hmc_labels = hmc_labels.to(device)
+                mean_output = netG(hmc_samples, hmc_labels)
                 bsz = g_fake_data.size(0)
 
-                mean_output_summed = torch.zeros_like(g_fake_data)
+                mean_output_summed = torch.zeros_like(g_fake_data).to(device)
                 for cnt in range(args.num_samples_posterior):
                     mean_output_summed = mean_output_summed + mean_output[cnt*bsz:(cnt+1)*bsz]
                 mean_output_summed = mean_output_summed / args.num_samples_posterior  
@@ -223,8 +241,8 @@ def presgan(dat, netG, netD, log_sigma, args):
                         stepsize, acceptRate.min().item(), acceptRate.mean().item(), acceptRate.max().item()))
 
         if epoch % args.save_imgs_every == 0:
-            rand_y_one_hot = torch.FloatTensor(args.num_gen_images, NUM_CLASS).zero_()
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(args.num_gen_images,1), seed=123), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
+            rand_y_one_hot = torch.FloatTensor(args.num_gen_images, NUM_CLASS).zero_().to(device) # adding cuda here
+            rand_y_one_hot = rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(args.num_gen_images,1), device = device), 1).to(device) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
             fake = netG(fixed_noise, rand_y_one_hot).detach()
 
             vutils.save_image(fake, '%s/presgan_%s_fake_epoch_%03d.png' % (args.results_folder, args.dataset, epoch), normalize=True, nrow=20) 
@@ -232,4 +250,4 @@ def presgan(dat, netG, netD, log_sigma, args):
         if epoch % args.save_ckpt_every == 0:
             torch.save(netG.state_dict(), os.path.join(args.results_folder, 'netG_presgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
             torch.save(log_sigma, os.path.join(args.results_folder, 'log_sigma_%s_%s.pth'%(args.dataset, epoch)))
-
+            torch.save(netD.state_dict(), os.path.join(args.results_folder, 'netD_presgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
