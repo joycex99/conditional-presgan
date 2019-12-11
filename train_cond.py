@@ -171,13 +171,13 @@ def presgan(dat, netG, netD, log_sigma, args):
             g_error_gan = criterion(dg_fake_decision, labelv) 
             D_G_z2 = dg_fake_decision.mean().item()
 
-            # TO TEST WITHOUT ENTROPY, SET: 
-            if epoch < 10 and args.lambda_ != 0 and args.dataset != 'mnist': 
-                args.lambda_ = 0
-            elif epoch < 20 and args.lambda_ != 0 and args.dataset != 'mnist': 
-                args.lambda_ = 0.0001
-            elif args.lambda_ != 0 and args.dataset != 'mnist':
-                args.lambda_ = 0.0002
+#             # TO TEST WITHOUT ENTROPY, SET: 
+#             if epoch < 10 and args.lambda_ != 0 and args.dataset != 'mnist': 
+#                 args.lambda_ = 0
+#             elif epoch < 20 and args.lambda_ != 0 and args.dataset != 'mnist': 
+#                 args.lambda_ = 0.0001
+#             elif args.lambda_ != 0 and args.dataset != 'mnist':
+#                 args.lambda_ = 0.0002
 
             if args.lambda_ == 0:
                 g_error_gan.backward()
@@ -191,7 +191,6 @@ def presgan(dat, netG, netD, log_sigma, args):
                         args.num_samples_posterior, args.leapfrog_steps, stepsize, args.flag_adapt, 
                             args.hmc_learning_rate, args.hmc_opt_accept)
                 
-                # TODO: check if output size should be bsz
                 bsz, d = hmc_samples.size()
                 hmc_samples = hmc_samples.view(bsz, d, 1, 1).to(device)
                 hmc_labels = hmc_labels.to(device)
