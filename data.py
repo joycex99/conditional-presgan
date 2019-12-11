@@ -5,6 +5,8 @@ import os
 import torchvision
 import random
 import scipy
+from torch.utils import data
+from PIL import Image
 
 from scipy.spatial.distance import pdist, squareform
 
@@ -17,6 +19,10 @@ np.random.seed(2019)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 kwargs = {'num_workers': 4, 'pin_memory': True} if torch.cuda.is_available() else {}
+CROPSIZE = 178
+IMAGE_DIR = 'data/celeba/images'
+ATTR_PATH = 'data/celeba/list_attr_celeba.txt'
+SELECTED_ATTRS = ['Male']
 
 def load_data(name, dataroot, batch_size, device, imgsize=None, 
                 Ntrain=None, Ntest=None, n_mixtures=10, radius=3, std=0.05):
@@ -106,28 +112,142 @@ def create_data(name, data_path, batch_size, device, imgsize, Ntrain, Ntest, n_m
                 transforms.ToTensor(),
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
         
+        classes = ('plane', 'car', 'bird', 'cat',
+           'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
         cifar = torchvision.datasets.CIFAR10(root=data_path, download=True, transform=transform, train=True)
         train_loader = DataLoader(cifar, batch_size=1, shuffle=True, num_workers=0)
         X_training = torch.zeros(len(train_loader), nc, imgsize, imgsize)
+        Y_training = torch.zeros(len(train_loader))
+
         for i, x in enumerate(train_loader):
             X_training[i, :, :, :] = x[0]
+            Y_training[i] = x[1]
             if i % 10000 == 0:
                 print('i: {}/{}'.format(i, len(train_loader)))
 
         cifar = torchvision.datasets.CIFAR10(root=data_path, download=True, transform=transform, train=False)
         test_loader = DataLoader(cifar, batch_size=1, shuffle=False, num_workers=0)
         X_test = torch.zeros(len(test_loader), nc, imgsize, imgsize)
+        Y_test = torch.zeros(len(test_loader))
         for i, x in enumerate(test_loader):
             X_test[i, :, :, :] = x[0]
+            Y_test[i] = x[1]
             if i % 1000 == 0:
                 print('i: {}/{}'.format(i, len(test_loader)))
 
-        dat = {'X_train': X_training, 'X_test': X_test, 'nc': nc}
+
+        Y_training = Y_training.type('torch.LongTensor')
+        Y_test = Y_test.type('torch.LongTensor')
+        dat = {'X_train': X_training, 'Y_train': Y_training, 'X_test': X_test, 'Y_test': Y_test, 'nc': nc}
+
+    elif name == "celeba":
+        nc = 3 
+        transform = []
+        transform.append(transforms.CenterCrop(CROPSIZE))
+        transform.append(transforms.Resize(imgsize))
+        transform.append(transforms.ToTensor())
+        transform.append(transforms.Normalize(mean=(0.5, 0.5, 0.5), std=(0.5, 0.5, 0.5)))
+        transform = transforms.Compose(transform)
+
+        train_dataset = CelebA(IMAGE_DIR, ATTR_PATH, SELECTED_ATTRS, transform, 'train')
+        train_loader = data.DataLoader(dataset=train_dataset,
+                                  batch_size=1,
+                                  shuffle=True,
+                                  num_workers=4)
+
+        X_training = torch.zeros(len(train_loader), nc, imgsize, imgsize)
+        Y_training = torch.zeros(len(train_loader))
+
+        for i, x in enumerate(train_loader):
+            X_training[i, :, :, :] = x[0]
+            Y_training[i] = x[1]
+            if i % 10000 == 0:
+                print('i: {}/{}'.format(i, len(train_loader)))
+
+        test_dataset = CelebA(IMAGE_DIR, ATTR_PATH, SELECTED_ATTRS, transform, 'test')
+        test_loader = data.DataLoader(dataset=test_dataset,
+                                  batch_size=1,
+                                  shuffle=True,
+                                  num_workers=4)
+
+        X_test = torch.zeros(len(test_loader), nc, imgsize, imgsize)
+        Y_test = torch.zeros(len(test_loader))
+        for i, x in enumerate(test_loader):
+            X_test[i, :, :, :] = x[0]
+            Y_test[i] = x[1]
+            if i % 1000 == 0:
+                print('i: {}/{}'.format(i, len(test_loader)))
+
+        Y_training = Y_training.type('torch.LongTensor')
+        Y_test = Y_test.type('torch.LongTensor')
+        dat = {'X_train': X_training, 'Y_train': Y_training, 'X_test': X_test, 'Y_test': Y_test, 'nc': nc}
 
     else:
         raise NotImplementedError('Dataset not supported yet.')
 
     return dat
+
+
+class CelebA(data.Dataset):
+    """Dataset class for the CelebA dataset."""
+
+    def __init__(self, image_dir, attr_path, selected_attrs, transform, mode):
+        """Initialize and preprocess the CelebA dataset."""
+        self.image_dir = image_dir
+        self.attr_path = attr_path
+        self.selected_attrs = selected_attrs
+        self.transform = transform
+        self.mode = mode
+        self.train_dataset = []
+        self.test_dataset = []
+        self.attr2idx = {}
+        self.idx2attr = {}
+        self.preprocess()
+
+        if mode == 'train':
+            self.num_images = len(self.train_dataset)
+        else:
+            self.num_images = len(self.test_dataset)
+
+    def preprocess(self):
+        """Preprocess the CelebA attribute file."""
+        lines = [line.rstrip() for line in open(self.attr_path, 'r')]
+        all_attr_names = lines[1].split()
+        for i, attr_name in enumerate(all_attr_names):
+            self.attr2idx[attr_name] = i
+            self.idx2attr[i] = attr_name
+
+        lines = lines[2:]
+        random.seed(1234)
+        random.shuffle(lines)
+        for i, line in enumerate(lines):
+            split = line.split()
+            filename = split[0]
+            values = split[1:]
+
+            label = []
+            for attr_name in self.selected_attrs:
+                idx = self.attr2idx[attr_name]
+                label.append(values[idx] == '1')
+
+            if (i+1) < 2000:
+                self.test_dataset.append([filename, label])
+            else:
+                self.train_dataset.append([filename, label])
+
+        print('Finished preprocessing the CelebA dataset...')
+
+    def __getitem__(self, index):
+        """Return one image and its corresponding attribute label."""
+        dataset = self.train_dataset if self.mode == 'train' else self.test_dataset
+        filename, label = dataset[index]
+        image = Image.open(os.path.join(self.image_dir, filename))
+        return self.transform(image), torch.FloatTensor(label)
+
+    def __len__(self):
+        """Return the number of images."""
+        return self.num_images
 
 def stack_mnist(data_dir, num_training_sample, num_test_sample, imageSize):
     # Load MNIST images... 60K in train and 10K in test
