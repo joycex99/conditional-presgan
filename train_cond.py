@@ -1,251 +1,325 @@
-import torch 
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F 
-import torchvision.utils as vutils
+import argparse
+import os
+from tqdm import tqdm
+import numpy as np
+import matplotlib.pyplot as plt
+from datetime import datetime
 
-import seaborn as sns
-import os 
-import pickle 
-import math 
-import csv
+import torch
+import torch.nn.functional as F
+from torch.nn.utils import clip_grad_norm_
+from torch.autograd import Variable
 
-import utils 
-import hmc 
+from model import TCN
+
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 
-from torch.distributions.normal import Normal
-from tensorboardX import SummaryWriter
+PATH = 'histdata/aggr_60min/'
 
-torch.manual_seed(123)
-real_label = 1
-fake_label = 0
-criterion = nn.BCELoss()
-criterion_mse = nn.MSELoss()
 
-def dcgan(dat, netG, netD, args):
-    device = args.device
+def concat_data(path):
+    """Return concatenated data from arrays.
+
+    Args:
+        path : str
+            path to load data from
+    Returns:
+        arrays concatenated by year and pair into large aggregate array
+    """
+    pairs = ['EURGBP', 'EURUSD', 'USDHUF', 'USDJPY']
+    final_arrs = []
+    for year in range(2013, 2020):
+        pair_arr = np.concatenate([np.load(
+            path + pair + '_' + str(year) + '_aggregated.npy') for pair in pairs], axis=1)
+        final_arrs.append(pair_arr)
+    return np.concatenate(final_arrs, axis=0)
+
+
+def moving_average(x):
+    """Returns moving average of a window sized 3 on array x."""
+    return np.convolve(x, np.ones(3), 'valid') / 3  # 3 is window size
+
+
+def reshape_data_TCN(input_data, num_timesteps=30, skip_interval=30):
+    """Reshapes input data into features and labels.
+
+    Args:
+        input_data : numpy array
+            Input data to be reshaped
+        num_timesteps : int
+            Number of time steps to slice on
+        skip_interval : int
+            Interval at the end of the data to skip
+    Returns:
+        Reshaped feature and label numpy arrays
+    """
+    # TCN Input must be num_samples, num_timesteps, num_features
+    reshaped_X = []
+    reshaped_Y = []
+
+    # Create one datapoint based on num_timesteps
+    for x in range(0, input_data.shape[0] - num_timesteps, skip_interval):
+        data_slice = np.array(input_data[x:x+num_timesteps, :])
+        #data_slice = np.apply_along_axis(moving_average, 0, data_slice)
+        reshaped_X.append(data_slice)
+
+        # If EUR/USD price goes up in the next day pos class, else neg class
+        if input_data[x+num_timesteps, 3] > input_data[x+num_timesteps - 1, 3]:
+            reshaped_Y.append(1)
+        else:
+            reshaped_Y.append(0)
+
+    return np.array(reshaped_X), np.array(reshaped_Y)
+
+
+def train_epoch(model, X, Y, opt, device, batch_size=10, clip=1.0):
+    """Trains the model for one epoch.
+
+    Args:
+        model : torch.model
+            Model to train on
+        X : np.array
+            Feature array to train the model on.
+        Y : np.array
+            Label array.
+        clip : np.float64
+            default 1.0, Float argument for clipping
+        opt : torch.optim.optimizer
+            Torch optimizer to use.
+        device : torch.device
+            Torch device to use (cpu or gpu)
+        batch_size : int
+            Batch size to train on.
+    Returns:
+        losses : list
+            List of losses accrued over the epoch.
+        avg_loss : float
+            Average model loss of the epoch
+        accuracy : float
+            Accuracy of the model
+    """
+    nll_loss = F.nll_loss
+
     if torch.cuda.is_available():
-        netG.cuda()
-        netD.cuda()
-        criterion.cuda()
-        criterion_mse.cuda()
-    X_training = dat['X_train'].to(device)
-    fixed_noise = torch.randn(args.num_gen_images, args.nz, 1, 1, device=device)
-    optimizerD = optim.Adam(netD.parameters(), lr=args.lrD, betas=(args.beta1, 0.999))
-    optimizerG = optim.Adam(netG.parameters(), lr=args.lrG, betas=(args.beta1, 0.999)) 
-    for epoch in range(1, args.epochs+1):
-        for i in range(0, len(X_training), args.batchSize):
-            netD.zero_grad()
-            stop = min(args.batchSize, len(X_training[i:]))
-            real_cpu = X_training[i:i+stop].to(device)
+        model.cuda()
 
-            batch_size = real_cpu.size(0)
-            label = torch.full((batch_size,), real_label, device=device)
+    model.train()
+    losses = []
+    correct = 0
+    for beg_i in tqdm(range(0, X.shape[0], batch_size)):
+        # Pull batch
+        x_batch = X[beg_i:beg_i + batch_size, :, :]
+        y_batch = Y[beg_i:beg_i + batch_size]
 
-            output = netD(real_cpu)
-            errD_real = criterion(output, label)
-            errD_real.backward()
-            D_x = output.mean().item()
+        # Format np arrays
+        x_batch = torch.from_numpy(x_batch).float().to(device=device)
+        y_batch = torch.from_numpy(y_batch).long().to(device=device)
+        x_batch, y_batch = Variable(x_batch), Variable(y_batch)
 
-            # train with fake
-            noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
-            fake = netG(noise)
-            label.fill_(fake_label)
-            output = netD(fake.detach())
-            errD_fake = criterion(output, label)
-            errD_fake.backward()
-            D_G_z1 = output.mean().item()
-            errD = errD_real + errD_fake
-            optimizerD.step()
+        # compute loss + grad + update
+        opt.zero_grad()
+        y_hat = model(x_batch)
+        loss = nll_loss(y_hat, y_batch)
+        loss.backward()
 
-            # (2) Update G network: maximize log(D(G(z)))
+        clip_grad_norm_(model.parameters(), clip)
+        opt.step()
 
-            netG.zero_grad()
-            label.fill_(real_label) 
-            output = netD(fake)
-            errG = criterion(output, label)
-            errG.backward()
-            D_G_z2 = output.mean().item()
-            optimizerG.step()
+        # Train accuracy
+        pred = y_hat.data.max(1, keepdim=True)[1]
 
-            ## log performance
-            if i % args.log == 0:
-                print('Epoch [%d/%d] .. Batch [%d/%d] .. Loss_D: %.4f .. Loss_G: %.4f .. D(x): %.4f .. D(G(z)): %.4f / %.4f'
-                        % (epoch, args.epochs, i, len(X_training), errD.data, errG.data, D_x, D_G_z1, D_G_z2))
+        if torch.cuda.is_available():
+            correct += pred.eq(y_batch.data.view_as(pred)).cuda().sum()
+        else:
+            correct += pred.eq(y_batch.data.view_as(pred)).cpu().sum()
 
-        print('*'*100)
-        print('End of epoch {}'.format(epoch))
-        print('*'*100)
+        # save losses
+        if torch.cuda.is_available():
+            losses.append(loss.data.cpu().numpy())
+        else:
+            losses.append(loss.data.numpy())
 
-        if epoch % args.save_imgs_every == 0:
-            fake = netG(fixed_noise).detach()
-            vutils.save_image(fake, '%s/dcgan_%s_fake_epoch_%03d.png' % (args.results_folder, args.dataset, epoch), normalize=True, nrow=20) 
-
-        if epoch % args.save_ckpt_every == 0:
-            torch.save(netG.state_dict(), os.path.join(args.results_folder, 'netG_dcgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
+    print('\Train set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
+        np.mean(losses), correct, X.shape[0],
+        100. * correct / X.shape[0]))
+    return losses, np.mean(losses), (correct / X.shape[0])
 
 
+def test(model, X, Y, device, batch_size=10):
+    """Evaluates the model.
 
-            
-def presgan(dat, netG, netD, log_sigma, args):
-    writer = SummaryWriter(log_dir='tensorboard'+args.dataset)
-    device = args.device
+    Args:
+        model : torch.model
+            Model to test on
+        X : np.array
+            Feature array to test the model on.
+        Y : np.array
+            Label array.
+        batch_size : int
+            Batch size to test on.
+    Returns:
+        avg_test_loss : float
+            Average model loss on test dataset
+        accuracy : float
+            Accuracy of the model
+    """
+    nll_loss = F.nll_loss
+
     if torch.cuda.is_available():
-        print("cuda")
-        netG.cuda()
-        netD.cuda()
-        criterion.cuda()
-        criterion_mse.cuda()
-    X_training = dat['X_train'].to(device) # [60000, 1, 64, 64]
-    fixed_noise = torch.randn(args.num_gen_images, args.nz, 1, 1, device=device)
-    torch.manual_seed(123)
-    # NEW
-    Y_training = dat['Y_train'].to(device)
-    # NUM_CLASS = 10
-    NUM_CLASS = args.n_classes
+        model.cuda()
 
-    optimizerD = optim.Adam(netD.parameters(), lr=args.lrD, betas=(args.beta1, 0.999))
-    optimizerG = optim.Adam(netG.parameters(), lr=args.lrG, betas=(args.beta1, 0.999)) 
-    sigma_optimizer = optim.Adam([log_sigma], lr=args.sigma_lr, betas=(args.beta1, 0.999))
-    if args.restrict_sigma:
-        logsigma_min = math.log(math.exp(args.sigma_min) - 1.0)
-        logsigma_max = math.log(math.exp(args.sigma_max) - 1.0)
-    stepsize = args.stepsize_num / args.nz
-    
-    bsz = args.batchSize
-    for epoch in range(1, args.epochs+1):
-        for i in range(0, len(X_training), bsz): # bsz = 64
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for beg_i in range(0, X.shape[0], batch_size):
+            # Pull batch
+            x_batch = X[beg_i:beg_i + batch_size, :, :]
+            y_batch = Y[beg_i:beg_i + batch_size]
 
-            sigma_x = F.softplus(log_sigma).view(1, 1, args.imageSize, args.imageSize)
+            # Format np arrays
+            x_batch = torch.from_numpy(x_batch).float().to(device=device)
+            y_batch = torch.from_numpy(y_batch).long().to(device=device)
+            x_batch, y_batch = Variable(
+                x_batch, volatile=True), Variable(y_batch)
 
-            netD.zero_grad()
-            stop = min(bsz, len(X_training[i:]))
-            real_cpu = X_training[i:i+stop].to(device) # [64, 1, 64, 64]
+            # Compute accuracy
+            y_hat = model(x_batch)
+            test_loss += nll_loss(y_hat, y_batch, size_average=False).item()
+            pred = y_hat.data.max(1, keepdim=True)[1]
 
-            batch_size = real_cpu.size(0)
-            labelv = torch.full((batch_size,), real_label).to(device)
-
-            # train discriminator on real (noised) data and real labels
-            y_labels = Y_training[i:i+stop].to(device)
-            y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).to(device) # adding cuda here 
-            # print(batch_size, bsz, y_labels.size())
-            y_one_hot = y_one_hot.zero_().scatter_(1, y_labels.view(batch_size, 1), 1).to(device)
-
-            noise_eta = torch.randn_like(real_cpu).to(device)
-            noised_data = real_cpu + sigma_x.detach() * noise_eta
-            out_real = netD(noised_data, y_one_hot) #, y_one_hot_labels
-            errD_real = criterion(out_real, labelv)
-            errD_real.backward()
-            D_x = out_real.mean().item()
-
-            # make generator output image from random labels; make discriminator classify
-            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_().to(device) # adding cuda here 
-            rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), device = device), 1) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
-
-            noise = torch.randn(batch_size, args.nz, 1, 1, device=device)
-            mu_fake = netG(noise, rand_y_one_hot) 
-            fake = mu_fake + sigma_x * noise_eta
-            labelv = labelv.fill_(fake_label).to(device)
-            out_fake = netD(fake.detach(), rand_y_one_hot)
-            errD_fake = criterion(out_fake, labelv)
-            errD_fake.backward()
-            D_G_z1 = out_fake.mean().item()
-            errD = errD_real + errD_fake
-            optimizerD.step()
-
-            # update G network: maximize log(D(G(z)))
-
-            netG.zero_grad()
-            sigma_optimizer.zero_grad()
-
-            rand_y_one_hot = torch.FloatTensor(batch_size, NUM_CLASS).zero_().to(device)
-            rand_y_one_hot = rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(batch_size,1), device = device), 1).to(device)
-            labelv = labelv.fill_(real_label).to(device)  
-            gen_input = torch.randn(batch_size, args.nz, 1, 1, device=device)
-            out = netG(gen_input, rand_y_one_hot) # add rand y labels
-            noise_eta = torch.randn_like(out)
-            g_fake_data = out + noise_eta * sigma_x
-
-            dg_fake_decision = netD(g_fake_data, rand_y_one_hot) # add rand y labels
-            g_error_gan = criterion(dg_fake_decision, labelv) 
-            D_G_z2 = dg_fake_decision.mean().item()
-
-#             # TO TEST WITHOUT ENTROPY, SET: 
-#             if epoch < 10 and args.lambda_ != 0 and args.dataset != 'mnist': 
-#                 args.lambda_ = 0
-#             elif epoch < 20 and args.lambda_ != 0 and args.dataset != 'mnist': 
-#                 args.lambda_ = 0.0001
-#             elif args.lambda_ != 0 and args.dataset != 'mnist':
-#                 args.lambda_ = 0.0002
-
-            if args.lambda_ == 0:
-                g_error_gan.backward()
-                optimizerG.step() 
-                sigma_optimizer.step()
-
+            if torch.cuda.is_available():
+                correct += pred.eq(y_batch.data.view_as(pred)).cuda().sum()
             else:
-                # added y_tilde param (rand_y_one_hot)
-                hmc_samples, hmc_labels, acceptRate, stepsize = hmc.get_samples(
-                    netG, g_fake_data.detach(), rand_y_one_hot.detach(), gen_input.clone(), sigma_x.detach(), args.burn_in, 
-                        args.num_samples_posterior, args.leapfrog_steps, stepsize, args.flag_adapt, 
-                            args.hmc_learning_rate, args.hmc_opt_accept)
-                
-                bsz, d = hmc_samples.size()
-                hmc_samples = hmc_samples.view(bsz, d, 1, 1).to(device)
-                hmc_labels = hmc_labels.to(device)
-                mean_output = netG(hmc_samples, hmc_labels)
-                bsz = g_fake_data.size(0)
+                correct += pred.eq(y_batch.data.view_as(pred)).cpu().sum()
 
-                mean_output_summed = torch.zeros_like(g_fake_data).to(device)
-                for cnt in range(args.num_samples_posterior):
-                    mean_output_summed = mean_output_summed + mean_output[cnt*bsz:(cnt+1)*bsz]
-                mean_output_summed = mean_output_summed / args.num_samples_posterior  
-
-                c = ((g_fake_data - mean_output_summed) / sigma_x**2).detach()
-                g_error_entropy = torch.mul(c, out + sigma_x * noise_eta).mean(0).sum()
-
-                g_error = g_error_gan - args.lambda_ * g_error_entropy
-                g_error.backward()
-                optimizerG.step() 
-                sigma_optimizer.step()
-
-            if args.restrict_sigma:
-                log_sigma.data.clamp_(min=logsigma_min, max=logsigma_max)
-
-            ## log performance
-            if i % args.log == 0:
-                print('Epoch [%d/%d] .. Batch [%d/%d] .. Loss_D: %.4f .. Loss_G: %.4f .. D(x): %.4f .. D(G(z)): %.4f / %.4f'
-                        % (epoch, args.epochs, i, len(X_training), errD.data, g_error_gan.data, D_x, D_G_z1, D_G_z2))
-                with open('%s/log.csv' % args.results_folder, 'a') as f:
-                    r = csv.writer(f)
-                    # Loss_G, Loss_D, D(x), D(G(z))
-                    r.writerow([g_error_gan.data, errD.data, D_x, D_G_z2])
+        avg_test_loss = test_loss/X.shape[0]
+        print('\Validation set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)\n'.format(
+            avg_test_loss, correct, X.shape[0],
+            100. * correct / X.shape[0]))
+        return avg_test_loss, (correct / X.shape[0])
 
 
-            if i % (2*args.log) == 0:
-                t_iter = (epoch*len(X_training)+i)/bsz
-                writer.add_scalar('Loss_G', g_error_gan.data, t_iter)
-                writer.add_scalar('Loss_D', errD.data, t_iter)
-                writer.add_scalar('D(x)', D_x, t_iter)
-                writer.add_scalar('D(G(z))', D_G_z2, t_iter)
+def create_directory(model_dir):
+    """Creates a new directory to save model info.
 
-        print('*'*100)
-        print('End of epoch {}'.format(epoch))
-        print('sigma min: {} .. sigma max: {}'.format(torch.min(sigma_x), torch.max(sigma_x)))
-        print('*'*100)
-        if args.lambda_ > 0:
-            print('| MCMC diagnostics ====> | stepsize: {} | min ar: {} | mean ar: {} | max ar: {} |'.format(
-                        stepsize, acceptRate.min().item(), acceptRate.mean().item(), acceptRate.max().item()))
+    Args:
+        model_dir : str
+            Global directory to store all model weights and loss info
+    Returns:
+        dir_name : str
+            Timestamped directory to save current run info
+    """
+    today = datetime.now()
+    curr_time = today.strftime('%d%m%Y_%H%M')
+    dir_name = 'model_dir/model_state_' + curr_time
+    os.mkdir(dir_name)
+    return dir_name
 
-        if epoch % args.save_imgs_every == 0:
-            rand_y_one_hot = torch.FloatTensor(args.num_gen_images, NUM_CLASS).zero_().to(device) # adding cuda here
-            rand_y_one_hot = rand_y_one_hot.scatter_(1, torch.randint(0, NUM_CLASS, size=(args.num_gen_images,1), device = device), 1).to(device) # #rand_y_one_hot.scatter_(1, torch.from_numpy(np.random.randint(0, 10, size=(bsz,1))), 1)
-            fake = netG(fixed_noise, rand_y_one_hot).detach()
 
-            vutils.save_image(fake, '%s/presgan_%s_fake_epoch_%03d.png' % (args.results_folder, args.dataset, epoch), normalize=True, nrow=20) 
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--path', dest='modeldir',
+                        type=str, help='Directory Path to save model to.', default='model_dir')
+    parser.add_argument('--epochs', dest='num_epochs',
+                        type=int, help='Number of epochs.', default=10)
+    parser.add_argument('--dropout', dest='dropout', default=0,
+                        type=float, help='dropoutval')
+    parser.add_argument('--split', dest='train_split', default=0.8,
+                        type=float, help='training split')
+    parser.add_argument('--clip', dest='clip', default=1.0,
+                        type=float, help='Gradient clip value')
+    parser.add_argument('--lr', dest='lr', default=5e-04,
+                        type=float, help='Learning rate')
+    parser.add_argument('--datapath', dest='datapath', type=str,
+                        default='oanda_data.npy', help='Path to load data')
 
-        if epoch % args.save_ckpt_every == 0:
-            torch.save(netG.state_dict(), os.path.join(args.results_folder, 'netG_presgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
-            torch.save(log_sigma, os.path.join(args.results_folder, 'log_sigma_%s_%s.pth'%(args.dataset, epoch)))
-            torch.save(netD.state_dict(), os.path.join(args.results_folder, 'netD_presgan_%s_epoch_%s.pth'%(args.dataset, epoch)))
+    args = parser.parse_args()
+
+    torch.manual_seed(1111)
+
+    # set device for cuda
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print('device' + 'cuda is avail' + str(torch.cuda.is_available()))
+
+    # Load Raw Data
+    data_arr = concat_data(PATH)
+
+    # Reshape
+    n_train = round(args.train_split * data_arr.shape[0])
+    n_val = round((0.5*(1-args.train_split)) * data_arr.shape[0])
+    X_train, y_train = reshape_data_TCN(data_arr[:n_train])
+    X_val, y_val = reshape_data_TCN(data_arr[n_train:])
+    #X_test, y_test = reshape_data_TCN(data_arr[n_train + n_val:])
+
+    # Class distribution
+    print(np.unique(y_train, return_counts=True))
+    print(np.unique(y_val, return_counts=True))
+    #print(np.unique(y_test, return_counts=True))
+
+    # ------------------
+
+    channel_sizes = [25] * 12
+
+    # Init model
+    model = TCN(30, 2, channel_sizes,
+                kernel_size=6,
+                dropout=args.dropout).to(device)
+
+    # Opt/Loss
+    # TODO : make this into argument instead of hardcoding
+    opt = torch.optim.RMSprop(model.parameters(), lr=args.lr)
+
+    # opt = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.9, 0.999))
+    print('Model State')
+    for param_tensor in model.state_dict():
+        print(param_tensor, '\t', model.state_dict()[param_tensor].size())
+
+    print("Optimizer's state_dict:")
+    for var_name in opt.state_dict():
+        print(var_name, '\t', opt.state_dict()[var_name])
+
+    e_losses = []
+    avg_train_losses = []
+    avg_test_losses = []
+    avg_train_accs = []
+    avg_test_accs = []
+
+    try:
+        print('Training for ' + str(args.num_epochs) + 'epochs')
+        for e in range(args.num_epochs):
+            tloss, avg_train_loss, avg_train_acc = train_epoch(
+                model, X_train, y_train, opt, device)
+            avg_test_loss, avg_test_acc = test(model, X_val, y_val, device)
+
+            e_losses += tloss
+            avg_train_losses.append(avg_test_loss)
+            avg_test_losses.append(avg_test_loss)
+            avg_train_accs.append(avg_train_acc)
+            avg_test_accs.append(avg_test_acc)
+    except KeyboardInterrupt:
+        if torch.cuda.is_available():
+            torch.cuda.ipc_collect()
+        pass
+
+    curr_dir_name = create_directory(args.modeldir)
+
+    print('Saving model to:' + curr_dir_name+'/model')
+    torch.save(model.state_dict(), curr_dir_name+'/model')
+
+    plt.plot(avg_train_accs, label='train')
+    plt.plot(avg_test_accs, label='test')
+    plt.xlabel('Epochs')
+    plt.ylabel('Average accuracy')
+    plt.legend()
+    plt.savefig(curr_dir_name + '/acc.png')
+    plt.close()
+
+    plt.plot(avg_train_losses, label='train')
+    plt.plot(avg_test_losses, label='test')
+    plt.xlabel('Epochs')
+    plt.ylabel('Average Loss')
+    plt.legend()
+    plt.savefig(curr_dir_name + '/loss.png')
+    plt.show()
